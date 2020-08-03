@@ -48,6 +48,10 @@ typedef enum {
   WEBSOCKET_OPCODE_PONG  = 0xA
 } WEBSOCKET_OPCODES_t;
 
+
+typedef void (*ws_server_callback_t)(uint8_t num, WEBSOCKET_TYPE_t type, char *msg, uint64_t len, void *pvParameters);
+typedef void (*ws_client_callback_t)(WEBSOCKET_TYPE_t type,char* msg,uint64_t len, void *pvParameters);
+
 // the header, useful for creating and quickly passing to functions
 typedef struct {
   union {
@@ -82,8 +86,10 @@ typedef struct {
   bool contin_text;     // is the continue a binary or text?
   uint64_t len;         // length of continuation
   uint32_t unfinished;      // sometimes netconn doesn't read a full frame, treated similarly to a continuation frame
-  void (*ccallback)(WEBSOCKET_TYPE_t type,char* msg,uint64_t len); // client callback
-  void (*scallback)(uint8_t num,WEBSOCKET_TYPE_t type,char* msg,uint64_t len); // server callback
+  ws_client_callback_t ccallback; // client callback
+  void * ccallback_arg;
+  ws_server_callback_t scallback; // server callback
+  void * scallback_arg;
 } ws_client_t;
 
 // returns the populated client struct
@@ -92,8 +98,10 @@ typedef struct {
 // scallback = callback for server (userspace)
 ws_client_t ws_connect_client(struct netconn* conn,
                               char* url,
-                              void (*ccallback)(WEBSOCKET_TYPE_t type,char* msg,uint64_t len),
-                              void (*scallback)(uint8_t num,WEBSOCKET_TYPE_t type,char* msg,uint64_t len)
+                              ws_client_callback_t ccallback,
+                              void * ccallback_arg,
+                              ws_server_callback_t scallback,
+                              void * scallback_arg
                              );
 void ws_disconnect_client(ws_client_t* client,bool mask);
 bool ws_is_connected(ws_client_t client); // returns 1 if connected, status updates after send/read/connect/disconnect
