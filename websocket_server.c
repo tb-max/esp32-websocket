@@ -417,7 +417,7 @@ int ws_server_send_text_clients_from_callback(char *url, char *msg, uint64_t len
 
 int ws_server_send_text_all_from_callback(char *msg, uint64_t len)
 {
-  ESP_LOGI(TAG, "ws_server_send_text_all_from_callback, msg=%s, len=%d", msg, (int)len);
+  //ESP_LOGI(TAG, "ws_server_send_text_all_from_callback, msg=%s, len=%d", msg, (int)len);
   int ret = 0;
   int err;
   for (int i = 0; i < WEBSOCKET_SERVER_MAX_CLIENTS; i++)
