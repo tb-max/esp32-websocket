@@ -61,7 +61,9 @@ void ws_disconnect_client(ws_client_t *client, bool mask)
   if (client->len)
   {
     if (client->contin)
+    {
       free(client->contin);
+    }
     client->len = 0;
   }
   client->ccallback = NULL;
@@ -72,9 +74,9 @@ bool ws_is_connected(ws_client_t client)
 {
   if (client.conn)
   {
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 
 static void ws_generate_mask(ws_header_t *header)
@@ -96,21 +98,16 @@ static void ws_encrypt_decrypt(char *msg, ws_header_t header)
 
 int ws_send(ws_client_t *client, WEBSOCKET_OPCODES_t opcode, char *msg, uint64_t len, bool mask)
 {
-  char *out;
-  char *encrypt;
-  uint64_t pos;
-  uint64_t true_len;
-  ws_header_t header;
-  int ret;
-
-  header.param.pos.ZERO = 0; // reset the whole header
-  header.param.pos.ONE = 0;
-
-  header.param.bit.FIN = 1; // all pieces are done (you don't need a huge message anyway...)
-  header.param.bit.OPCODE = opcode;
+  ws_header_t header = {
+    .param.pos.ZERO = 0,
+    .param.pos.ONE = 0,
+    .param.bit.FIN = 1, // all pieces are done (you don't need a huge message anyway...)
+    .param.bit.OPCODE = opcode,
+    .length = len,
+  };  
   // populate LEN field
-  pos = 2;
-  header.length = len;
+  uint64_t pos = 2;
+  
   if (len <= 125)
   {
     header.param.bit.LEN = len;
@@ -126,6 +123,7 @@ int ws_send(ws_client_t *client, WEBSOCKET_OPCODES_t opcode, char *msg, uint64_t
     pos += 8;
   }
 
+  char *encrypt = NULL;
   if (mask)
   {
     ws_generate_mask(&header); // get a key
@@ -135,9 +133,9 @@ int ws_send(ws_client_t *client, WEBSOCKET_OPCODES_t opcode, char *msg, uint64_t
     pos += 4;                            // add the position
   }
 
-  true_len = pos + len; // get the length of the entire message
-  pos = 2;
-  out = malloc(true_len); // allocate dat memory
+  uint64_t const true_len = pos + len; // get the length of the entire message
+  pos = 2;  
+  char *out = malloc(true_len); // allocate dat memory
 
   out[0] = header.param.pos.ZERO; // save header
   out[1] = header.param.pos.ONE;
@@ -180,27 +178,14 @@ int ws_send(ws_client_t *client, WEBSOCKET_OPCODES_t opcode, char *msg, uint64_t
   {
     memcpy(&out[pos], msg, len);
   }
-
-  ret = netconn_write(client->conn, out, true_len, NETCONN_COPY); // finally! send it.
+  
+  int ret = netconn_write(client->conn, out, true_len, NETCONN_COPY); // finally! send it.
   free(out);                                                      // free the entire message
   return ret;
 }
 
 char *ws_read(ws_client_t *client, ws_header_t *header)
 {
-  char *ret;
-  char *append;
-  err_t err;
-  struct netbuf *inbuf;
-  struct netbuf *inbuf2;
-  char *buf;
-  char *buf2;
-  uint16_t len;
-  uint16_t len2;
-  uint64_t pos;
-  uint64_t cont_len;
-  uint64_t cont_pos;
-
   // if we read from this previously (not cont frames), stop reading
   if (client->unfinished)
   {
@@ -208,9 +193,15 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
     return NULL;
   }
 
-  err = netconn_recv(client->conn, &inbuf);
+  struct netbuf *inbuf;
+  err_t err = netconn_recv(client->conn, &inbuf);
   if (err != ERR_OK)
+  {
     return NULL;
+  }
+
+  char *buf;
+  uint16_t len;
   netbuf_data(inbuf, (void **)&buf, &len);
   if (!buf)
     return NULL;
@@ -220,7 +211,7 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
   header->param.pos.ONE = buf[1];
 
   // get the message length
-  pos = 2;
+  uint64_t pos = 2;
   if (header->param.bit.LEN <= 125)
   {
     header->length = header->param.bit.LEN;
@@ -241,8 +232,8 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
     memcpy(&(header->key.full), &buf[pos], 4); // extract the key
     pos += 4;
   }
-
-  ret = malloc(header->length + 1); // allocate memory, plus a byte
+  
+  char *ret = malloc(header->length + 1); // allocate memory, plus a byte
   if (!ret)
   {
     netbuf_delete(inbuf);
@@ -250,12 +241,13 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
     return NULL;
   }
 
-  cont_len = len - pos;                   // get the actual length
+  uint64_t cont_len = len - pos;                   // get the actual length
   memcpy(ret, &buf[pos], header->length); // allocate the total memory
-  cont_pos = cont_len;                    // get the initial position
+  uint64_t cont_pos = cont_len;                    // get the initial position
   // netconn gives messages in pieces, so we need to get those (different than OPCODE_CONT)
   while (cont_len < header->length)
   { // while the actual length is less than the header stated
+    struct netbuf *inbuf2;
     err = netconn_recv(client->conn, &inbuf2);
     if (err != ERR_OK)
     {
@@ -265,6 +257,9 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
       header->received = 0;
       return NULL;
     }
+
+    char *buf2;
+    uint16_t len2;
     netbuf_data(inbuf2, (void **)&buf2, &len2);
     // Prevent catastrophic failure due to memory leakage
     if (cont_len + len2 > header->length)
@@ -296,7 +291,8 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
         ((client->last_opcode == WEBSOCKET_OPCODE_BIN) || (client->last_opcode == WEBSOCKET_OPCODE_TEXT)))
     {
       cont_len = header->length + client->len;
-      append = malloc(cont_len);
+
+      char *append = malloc(cont_len);
       memcpy(append, client->contin, client->len);
       memcpy(&append[client->len], ret, header->length);
       free(client->contin);
@@ -342,20 +338,24 @@ char *ws_read(ws_client_t *client, ws_header_t *header)
 
 char *ws_hash_handshake(char *handshake, uint8_t len)
 {
-  const char hash[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-  const uint8_t hash_len = sizeof(hash);
-  char *ret;
-  char key[64];
-  unsigned char sha1sum[20];
-  unsigned int ret_len;
-
   if (!len)
+  {
     return NULL;
-  ret = malloc(32);
+  }
 
+  char *ret = malloc(32);
+
+  char key[64];
   memcpy(key, handshake, len);
+
+  const char hash[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
   strlcpy(&key[len], hash, sizeof(key));
+
+  unsigned char sha1sum[20];
+  const uint8_t hash_len = sizeof(hash);
   mbedtls_sha1((unsigned char *)key, len + hash_len - 1, sha1sum);
+  
+  unsigned int ret_len;
   mbedtls_base64_encode(NULL, 0, &ret_len, sha1sum, 20);
   if (!mbedtls_base64_encode((unsigned char *)ret, 32, &ret_len, sha1sum, 20))
   {
